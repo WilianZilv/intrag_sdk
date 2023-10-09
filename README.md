@@ -1,6 +1,16 @@
-# intrag-sdk
+<h1 align="center">
+intrag-sdk
+</h1>
 
-SDK não oficial do Itau Investiment Services
+<p align="center">
+    <em>SDK não oficial do Itau Investiment Services</em>
+</p>
+
+## Instalação
+
+```bash
+$ pip install intrag_sdk
+```
 
 ## Passivo
 
