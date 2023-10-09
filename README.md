@@ -1,6 +1,6 @@
 # intrag-sdk
 
-SDK do Itau Investiment Services não oficial
+SDK não oficial do Itau Investiment Services
 
 ## Passivo
 
@@ -18,9 +18,10 @@ nome_gestor: str = api.nome_gestor
 codigo_gestor: str = api.codigo_gestor
 fundos: pd.DataFrame = api.fundos
 
-# Consultas disponíveis
+# Movimentações do dia
 movimentacoes: pd.DataFrame = api.movimentos_do_dia()
 
+# Posição de cotistas
 codigo_fundo: str = fundos["codigoFundo"][0]
 
 posicoes: pd.DataFrame = api.posicao_cotistas(codigo_fundo=codigo_fundo)
