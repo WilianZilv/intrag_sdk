@@ -4,6 +4,9 @@ import re
 import datetime
 import pandas as pd
 import xml.etree.ElementTree as ET
+from intrag_sdk.passivo.file_types import TipoArquivo, Arquivo
+import zipfile
+import io
 
 DEFAULT_ENCODING = "ISO-8859-1"
 
@@ -14,14 +17,19 @@ class ItauPassivo:
         "content-type": "application/x-www-form-urlencoded",
     }
 
-    def __init__(self):
+    def __init__(self, echo=False):
         self.base_url = "https://www.itaucustodia.com.br/Passivo"
         self.cookies = {}
+        self.echo = echo
 
     def endpoint(self, path: str):
         return f"{self.base_url}{path}"
 
     def post(self, endpoint: str, data: dict = dict()):
+        if self.echo:
+            print(f"POST {endpoint}")
+            print(data)
+
         form_data = "&".join([f"{key}={value}" for key, value in data.items()])
 
         res = requests.post(
@@ -31,9 +39,11 @@ class ItauPassivo:
             data=form_data,
         )
 
+        self.cookies = {**self.cookies, **res.cookies.get_dict()}
+
         return res
 
-    def fetch_info(self):
+    def __fetch_gestor_info(self):
         """Seta codigo do gestor e lista de fundos disponiveis"""
         res = self.post("/abreFiltroConsultaMovimentoFundoTotais.do")
 
@@ -46,29 +56,8 @@ class ItauPassivo:
         codigo_gestor = gestor.attrs.get("value")
         nome_gestor = gestor.text
 
-        res = self.post(
-            "/listarFundosConsultaMovimentoFundoTotaisXML.do",
-            data={"codigoGestor": codigo_gestor},
-        )
-
-        root = ET.fromstring(res.text)
-        fundos = []
-        for fundo in root.iter("FundoForm"):
-            codigo_fundo = fundo.find("codigoFundo")
-            nome_fundo = fundo.find("nomeFundo")
-
-            if codigo_fundo is None or nome_fundo is None:
-                continue
-
-            fundos.append(
-                {"codigoFundo": codigo_fundo.text, "nomeFundo": nome_fundo.text}
-            )
-
-        fundos = pd.DataFrame(fundos)[["codigoFundo", "nomeFundo"]]
-
         self.nome_gestor = nome_gestor
         self.codigo_gestor = codigo_gestor
-        self.fundos = fundos
 
     def authenticate(self, user: str, password: str):
         res = self.post("/login.do", data={"ebusiness": user, "senha": password})
@@ -77,7 +66,102 @@ class ItauPassivo:
             raise Exception("Login Inválido")
 
         self.cookies = {"JSESSIONID": res.cookies.get("JSESSIONID")}
-        self.fetch_info()
+        self.__fetch_gestor_info()
+        self.__fetch_funds_info()
+
+    def __fetch_funds_info(self):
+        def fetch_code_and_name():
+            res = self.post(
+                "/listarFundosConsultaMovimentoFundoTotaisXML.do",
+                data={"codigoGestor": self.codigo_gestor},
+            )
+
+            root = ET.fromstring(res.text)
+            fundos = []
+            for fundo in root.iter("FundoForm"):
+                codigo_fundo = fundo.find("codigoFundo")
+                nome_fundo = fundo.find("nomeFundo")
+
+                if codigo_fundo is None or nome_fundo is None:
+                    continue
+
+                fundos.append(
+                    {"codigoFundo": codigo_fundo.text, "nomeFundo": nome_fundo.text}
+                )
+
+            return pd.DataFrame(fundos)[["codigoFundo", "nomeFundo"]]
+
+        def fetch_cnpj():
+            archive = self.download_de_arquivos(
+                TipoArquivo.TXT, Arquivo.CADASTRO_DE_FUNDOS
+            )
+
+            text = archive.read(archive.filelist[0]).decode("utf-8")
+
+            def get_cnpj(row):
+                pattern = r"[A-Za-z\s]0\d{14}"
+                result = re.search(pattern, row)
+                if not result:
+                    return None
+
+                return result.group(0)[2:16]
+
+            def get_fund_code(row):
+                pattern = r"\d{5}[A-Za-z\s]"
+                result = re.search(pattern, row)
+                if not result:
+                    return row
+
+                return result.group(0)[:-1]
+
+            def get_fund_info(row):
+                cnpj = get_cnpj(row)
+                fund_code = get_fund_code(row)
+                return {"codigoFundo": fund_code, "cnpj": cnpj}
+
+            data = list(map(get_fund_info, text.strip().split("\n")))
+            return pd.DataFrame(data)
+
+        codes = fetch_code_and_name()
+        cnpjs = fetch_cnpj()
+
+        self.fundos = codes.merge(cnpjs, on="codigoFundo")
+
+    def download_de_arquivos(
+        self,
+        tipo_arquivo: TipoArquivo,
+        arquivo: Arquivo,
+        data: datetime.date = datetime.date.today(),
+    ):
+        date_str = data.strftime("%d%m%Y")
+
+        self.post(
+            "/listarOpcoesArquivosDownloadArquivos.do",
+            data={
+                "codigoGestor": self.codigo_gestor,
+                "tipoArquivo": tipo_arquivo.value,
+                "data": date_str,
+            },
+        )
+
+        self.post(
+            "/processarDownloadArquivosAjax.do",
+            data={
+                "codigoGestor": self.codigo_gestor,
+                "tipoArquivo": tipo_arquivo.value,
+                "numeroArquivo": arquivo.value,
+            },
+        )
+
+        res = self.post(
+            "/EfetuarDownloadArquivosListaServlet",
+            data={
+                "checkArquivos": arquivo.value,
+                "numerosArquivosSelecionados": arquivo.value,
+            },
+        )
+
+        return zipfile.ZipFile(io.BytesIO(res.content), "r")
 
     def posicao_cotistas(self, codigo_fundo: str):
         data = {

@@ -1,1 +1,1 @@
-from intrag_sdk.passivo import ItauPassivo
+from intrag_sdk.passivo import ItauPassivo, Arquivo, TipoArquivo
