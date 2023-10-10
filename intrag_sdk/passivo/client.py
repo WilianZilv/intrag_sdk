@@ -13,6 +13,7 @@ import io
 from intrag_sdk.simpledbf import Dbf5
 
 DEFAULT_ENCODING = "ISO-8859-1"
+DEFAULT_FILE_ENCODING = "latin1"
 
 
 class FileNotFound(Exception):
@@ -100,6 +101,7 @@ class ItauPassivo:
         tipo_arquivo: TipoArquivo = TipoArquivo.DBF,
         data: datetime.date = datetime.date.today(),
         raw: bool = False,
+        encoding: str = DEFAULT_FILE_ENCODING,
     ) -> Union[List[Download], zipfile.ZipFile]:
         """
         Baixa arquivos do servidor e retorna uma lista de objetos Download ou um arquivo zip, dependendo do valor do parâmetro raw.
@@ -158,10 +160,11 @@ class ItauPassivo:
             file_data = None
 
             if tipo_arquivo == TipoArquivo.DBF:
-                file_data = cast(pd.DataFrame, Dbf5(raw_file_data).to_dataframe())
+                df = Dbf5(raw_file_data, encoding).to_dataframe()
+                file_data = cast(pd.DataFrame, df)
 
             if tipo_arquivo == TipoArquivo.TXT:
-                file_data = raw_file_data.decode("utf-8")
+                file_data = raw_file_data.decode(encoding)
 
             if file_data is not None:
                 downloads.append(Download(file_name=file.filename, data=file_data))
