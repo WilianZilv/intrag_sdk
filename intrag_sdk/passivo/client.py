@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+from typing import List, Union, cast
 import requests
 import bs4
 import re
@@ -8,7 +10,19 @@ from intrag_sdk.passivo.file_types import TipoArquivo, Arquivo
 import zipfile
 import io
 
+from intrag_sdk.simpledbf import Dbf5
+
 DEFAULT_ENCODING = "ISO-8859-1"
+
+
+class FileNotFound(Exception):
+    pass
+
+
+@dataclass
+class Download:
+    file_name: str
+    data: Union[str, pd.DataFrame]
 
 
 class ItauPassivo:
@@ -70,69 +84,36 @@ class ItauPassivo:
         self.__fetch_funds_info()
 
     def __fetch_funds_info(self):
-        def fetch_code_and_name():
-            res = self.post(
-                "/listarFundosConsultaMovimentoFundoTotaisXML.do",
-                data={"codigoGestor": self.codigo_gestor},
-            )
+        try:
+            downloads = self.download_de_arquivos(arquivo=Arquivo.CADASTRO_DE_FUNDOS)
 
-            root = ET.fromstring(res.text)
-            fundos = []
-            for fundo in root.iter("FundoForm"):
-                codigo_fundo = fundo.find("codigoFundo")
-                nome_fundo = fundo.find("nomeFundo")
+            downloads = cast(List[Download], downloads)
 
-                if codigo_fundo is None or nome_fundo is None:
-                    continue
+            self.fundos = cast(pd.DataFrame, downloads[0].data)
 
-                fundos.append(
-                    {"codigoFundo": codigo_fundo.text, "nomeFundo": nome_fundo.text}
-                )
-
-            return pd.DataFrame(fundos)[["codigoFundo", "nomeFundo"]]
-
-        def fetch_cnpj():
-            archive = self.download_de_arquivos(
-                TipoArquivo.TXT, Arquivo.CADASTRO_DE_FUNDOS
-            )
-
-            text = archive.read(archive.filelist[0]).decode("utf-8")
-
-            def get_cnpj(row):
-                pattern = r"[A-Za-z\s]0\d{14}"
-                result = re.search(pattern, row)
-                if not result:
-                    return None
-
-                return result.group(0)[2:16]
-
-            def get_fund_code(row):
-                pattern = r"\d{5}[A-Za-z\s]"
-                result = re.search(pattern, row)
-                if not result:
-                    return row
-
-                return result.group(0)[:-1]
-
-            def get_fund_info(row):
-                cnpj = get_cnpj(row)
-                fund_code = get_fund_code(row)
-                return {"codigoFundo": fund_code, "cnpj": cnpj}
-
-            data = list(map(get_fund_info, text.strip().split("\n")))
-            return pd.DataFrame(data)
-
-        codes = fetch_code_and_name()
-        cnpjs = fetch_cnpj()
-
-        self.fundos = codes.merge(cnpjs, on="codigoFundo")
+        except FileNotFound:
+            self.fundos = pd.DataFrame()
 
     def download_de_arquivos(
         self,
-        tipo_arquivo: TipoArquivo,
         arquivo: Arquivo,
+        tipo_arquivo: TipoArquivo = TipoArquivo.DBF,
         data: datetime.date = datetime.date.today(),
-    ):
+        raw: bool = False,
+    ) -> Union[List[Download], zipfile.ZipFile]:
+        """
+        Baixa arquivos do servidor e retorna uma lista de objetos Download ou um arquivo zip, dependendo do valor do parâmetro raw.
+
+        Argumentos:
+            tipo_arquivo (TipoArquivo): O tipo de arquivo a ser baixado.
+            arquivo (Arquivo): O arquivo a ser baixado.
+            data (datetime.date, opcional): A data do arquivo a ser baixado. O padrão é a data de hoje.
+            raw (bool, opcional): Se True, retorna um arquivo zip. Se False, retorna uma lista de objetos Download. O padrão é False.
+
+        Retorna:
+            Union[List[Download], zipfile.ZipFile]: Uma lista de objetos Download ou um arquivo zip, dependendo do valor do parâmetro raw.
+        """
+
         date_str = data.strftime("%d%m%Y")
 
         self.post(
@@ -161,9 +142,42 @@ class ItauPassivo:
             },
         )
 
-        return zipfile.ZipFile(io.BytesIO(res.content), "r")
+        if "zip" not in res.headers["Content-Type"]:
+            raise FileNotFound("Arquivo não encontrado")
+
+        archive = zipfile.ZipFile(io.BytesIO(res.content), "r")
+
+        if raw:
+            return archive
+
+        downloads = []
+
+        for file in archive.filelist:
+            raw_file_data = archive.read(file)
+
+            file_data = None
+
+            if tipo_arquivo == TipoArquivo.DBF:
+                file_data = cast(pd.DataFrame, Dbf5(raw_file_data).to_dataframe())
+
+            if tipo_arquivo == TipoArquivo.TXT:
+                file_data = raw_file_data.decode("utf-8")
+
+            if file_data is not None:
+                downloads.append(Download(file_name=file.filename, data=file_data))
+
+        return downloads
 
     def posicao_cotistas(self, codigo_fundo: str):
+        """
+        codigo_fundo (str): Pode ser encontrado em 'fundos'
+
+        ```
+        client = ItauPassivo()
+        client.fundos["CDFDO"].
+        ```
+        """
+
         data = {
             "codigoGestor": self.codigo_gestor,
             "codigoFundo": codigo_fundo,
