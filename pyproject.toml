@@ -1,12 +1,12 @@
 [project]
 name = "intrag-sdk"
-version = "0.1.4"
+version = "0.1.5"
 description = "Add your description here"
 authors = [
     { name = "Wilian", email = "wilianzilv@gmail.com" }
 ]
 dependencies = [
-    "requests>=2.31.0",
+    "requests>=1.0.0",
     "beautifulsoup4>=4.12.2",
     "pandas>=1.3.5",
 ]
