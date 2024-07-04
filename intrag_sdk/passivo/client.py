@@ -190,7 +190,12 @@ class ItauPassivo:
 
         html = make_soup(res)
 
-        tables = html.find("div", {"id": "listaDados"}).find_all("table")
+        tables = html.find("div", {"id": "listaDados"})
+
+        if tables is None:
+            return pd.DataFrame()
+
+        tables.find_all("table")
 
         data = list(map(parse_table, tables))
 
